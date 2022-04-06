@@ -46,12 +46,12 @@ Data StudyFeasibility;
 	if Diabetes_med_adherence = "?" then DM_Med_adherence =.;
 		else if Diabetes_med_adherence = "N/A" then DM_Med_adherence =.;
 		else DM_Med_adherence = Diabetes_med_adherence;
-*Check for dementia, schizophrenia, and down syndrome;
+*Check for exclusionary criteria;
 	if index(problem_list, 'dementia')>0 then CogDefExclusion = "Y";
 		else if index(problem_list, 'down')>0 then CogDefExclusion = "Y";
 		else if index(problem_list, 'schizo')>0 then CogDefExclusion = "Y";
 		else CogDefExclusion = "N";
-*Calculate Age;
+*Calculate from Excel Datetime;
 	DOB = DOB - 21916;
 	Age = yrdif(DOB, Today(), 'Age');
 *Time since last A1c Measure;
@@ -67,12 +67,13 @@ array nn (33) $ 18 _temporary_ ("Glipizide" "Glucotrol", "Glimpepride", "Amaryl"
          leave;
       end;
    end;
+*prxmatch could also be used to search for specific strings within current medications;
 *MPR only has missing data.  Dropping this variable;
 	drop MPR i;
 run;
-
 proc sort data=studyfeasibility nodupkey dupout=work.dups; by MRN;run;
-%pcmh(datafile="G:\PCMH registry 2016\Registry Exports\2022-03-22_PCMH_Regsitry.xlsx", out=PCMH3_22);
+*Run local macro import registry data;
+%pcmh(datafile=".../2022-03-22_PCMH_Regsitry.xlsx", out=PCMH3_22);
 data Studyfeasibility;
 	merge studyfeasibility (in=a) PCMH3_22(Keep=BMC_Lab_las_hem_a1c_val BMC_Lab_las_hem_a1c_dat MRN);
 	by MRN;
@@ -119,7 +120,7 @@ PROC GCHART DATA=EligiblePt;
                  plabel=(font='Albany AMT/bold' h=1.3);
                  
 RUN;
-
+title;
 
 proc univariate data=eligiblept;
 	var Last_HBA1c_val DM_Med_adherence;
