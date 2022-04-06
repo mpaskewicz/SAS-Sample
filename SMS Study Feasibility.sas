@@ -1,48 +1,30 @@
 *Import data pulled From epic;
-FILENAME REFFILE 'H:/DM2 Study Feasibility1.xlsx';
+%macro Importdata(filepath, out);
 options validvarname=v7;
-PROC IMPORT DATAFILE=REFFILE
+PROC IMPORT DATAFILE=&filepath
 	DBMS=XLSX
-	OUT=WORK.IMPORT replace;
+	OUT=WORK.&out replace;
 	GETNAMES=YES;
 RUN;
 
-PROC CONTENTS DATA=WORK.IMPORT; RUN;
-
-
-FILENAME REFFILE 'H:/DM2 Study Feasibility2.xlsx';
-options validvarname=v7;
-PROC IMPORT DATAFILE=REFFILE
-	DBMS=XLSX
-	OUT=WORK.IMPORT1;
-	GETNAMES=YES;
-RUN;
-
-PROC CONTENTS DATA=WORK.IMPORT1; RUN;
-
-FILENAME REFFILE 'H:/DM2 Study Feasibility3.xlsx';
-options validvarname=v7;
-PROC IMPORT DATAFILE=REFFILE
-	DBMS=XLSX
-	OUT=WORK.IMPORT2;
-	GETNAMES=YES;
-RUN;
-
-PROC CONTENTS DATA=WORK.IMPORT2; RUN;
-
+PROC CONTENTS DATA=WORK.&out; RUN;
+%mend
+%importdata(filepath="...\examplefile1.xlsx", out=Import1);
+%importdata(filepath="...\examplefile2.xlsx", out=Import2);
+%importdata(filepath="...\examplefile3.xlsx", out=Import3);
 	
 
-*Concatenate data sets and select only GIM pts where 'Type 1' does not appear in the problem list;
+*Concatenate data sets and select pts from my department that are not type 1 diabetics.;
 Data StudyFeasibility;
-	set import import1 import2;
+	set import1 import2 import3;
 	format Last_HBA1c_Val 9.2 age 2.;
-	where PCP_Department contains "PRIMARY CARE" 
+	where PCP_Department contains "My Dept" 
 		and index(Problem_list, 'type 1')=0;
-*A1c value importing as character.  Correct to Numeric;
+*A1c value importing as character because of values like '>14'.  Correct to Numeric;
 	if index(Last_HBA1c_Value, '>')>1 then Last_HBA1c_Val=14.1;
 		else if index(Last_HBA1c_Value, '<')>1 then Last_HBA1c_Val=3.9;
 		else Last_HBA1c_Val=Last_HBA1c_Value;
-*Diabetes Med Adherence value importing as character.  Correct to Numeric;
+*Diabetes Med Adherence value importing as character due to letter/special characters.  Correct to Numeric;
 	if Diabetes_med_adherence = "?" then DM_Med_adherence =.;
 		else if Diabetes_med_adherence = "N/A" then DM_Med_adherence =.;
 		else DM_Med_adherence = Diabetes_med_adherence;
@@ -55,7 +37,7 @@ Data StudyFeasibility;
 	DOB = DOB - 21916;
 	Age = yrdif(DOB, Today(), 'Age');
 *Time since last A1c Measure;
-	A1c6mo = intck('days', Last_HBA1c_date, today() );
+	A1c6mock = intck('days', Last_HBA1c_date, today() );
 *Check for at least 1 oral med;
 array nn (33) $ 18 _temporary_ ("Glipizide" "Glucotrol", "Glimpepride", "Amaryl", "Glyburide", "Diabeta", "Glynase", "Metformin", "Glucophage", "Glumetza",
 			"Fortamet", "Riomet", "Pioglitozone", "Rosiglitozone", "Acarbose", "Precose", "Miglitol", "Glyset", "Repaglinide", "Prandin", "Sitagliptin", 
@@ -72,26 +54,28 @@ array nn (33) $ 18 _temporary_ ("Glipizide" "Glucotrol", "Glimpepride", "Amaryl"
 	drop MPR i;
 run;
 proc sort data=studyfeasibility nodupkey dupout=work.dups; by MRN;run;
-*Run local macro import registry data;
+*Run local macro import registry data then merge with Epic data.  Supplemnt missing data where necessary in the data step.  A proc sql join with the 
+Coalesce fucntion could acheive the same result;
 %pcmh(datafile=".../2022-03-22_PCMH_Regsitry.xlsx", out=PCMH3_22);
 data Studyfeasibility;
 	merge studyfeasibility (in=a) PCMH3_22(Keep=BMC_Lab_las_hem_a1c_val BMC_Lab_las_hem_a1c_dat MRN);
 	by MRN;
 	if Last_HBA1c_val =. then Last_HBA1c_val = BMC_Lab_las_hem_a1c_val;
-	if A1c6mo =. then a1c6m = intck('days', BMC_Lab_las_hem_a1c_dat, today() );
+	if A1c6mo_Ck =. then a1c6mo_Ck = intck('days', BMC_Lab_las_hem_a1c_dat, today() );
 	if Pref_language not in("English", "Haitian Creole", "Spanish") then Pref_Language = "Other";
 	if a;
 run;
 
 proc sql;
-select count(distinct mrn) as Patient_Count,
+Title "Overall Number of Eligle Patients";
+select count(mrn) as Patient_Count,
 	pref_language as Preferred_Language
 	from studyfeasibility
 	where age between 18 and 75
 		and Last_HBA1c_val >=9
 		and CogDefExclusion ="N"
 		and match is not null
-		and A1c6mo < 181
+		and A1c6moCK < 181
 	group by Pref_Language
 	order by Patient_count desc;
 	
@@ -109,7 +93,7 @@ select MRN,
 		and Last_HBA1c_val >=9
 		and CogDefExclusion ="N"
 		and match is not null
-		and A1c6mo < 181;
+		and A1c6mock < 181;
 quit;
 
 TITLE 'Preferred Language for Eligible Patients';
@@ -122,12 +106,13 @@ PROC GCHART DATA=EligiblePt;
 RUN;
 title;
 
+*Assess Diabetic med adherence data with descriptive statistics;
 proc univariate data=eligiblept;
-	var Last_HBA1c_val DM_Med_adherence;
+	var DM_Med_adherence;
 run;
 
 proc sgplot data=eligiblept;
-	title "My Chart Activation Status as Proxy for Text Message Capability";
+	title "My Chart Activation Status as Proxy for Ability to recieve SMS messages";
 	vbar MYchart_status;
 run;
 	
