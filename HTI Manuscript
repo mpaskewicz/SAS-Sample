@@ -1,0 +1,238 @@
+*Import Data*;
+
+options validvarname=v7;
+Proc import datafile="G:\MPaskewicz\Intervention Analysis\A1c\write up\HTI Analysis 1.25.22.xlsx" 
+DBMS=xlsx out=work.HTI_analysis_rough Replace;
+	getnames=yes;
+	sheet="Import";
+run;
+data HTI_Analysis;
+	set hti_analysis_rough;
+	Drop Prelim_Date_Ck JanRep_A1c_date JanRepA1c_val int Init_date_ck A1c_Val_JR A1c_Val_DR A1c_LastVal_HTI
+		A1c_Date_JR;
+	Show_Rate_PCT = (HTI_Visits_Completed / HTI_Visits_Sched) * 100;
+	ID + 1;
+	mrn_char = put(mrn_as_value, $7.);
+run;
+
+%macro PCMH(datafile, out);
+options validvarname=v7;
+proc import datafile=&Datafile dbms=xlsx out=import replace;
+	getnames=yes;
+run;
+
+data &out;
+	set import (rename=(Bmc_Lab_Las_Hem_A1c_Val=TempA1c BMC_AMB_REG_MRN = MRN));
+	where PCP_Dept_Nm contains 'PRIMARY CARE';
+	format TempA1c $20. BMC_lab_Las_Hem_A1c_Val 9.1;
+	if index(TempA1c,"<")=0 and index(TempA1c, ">") = 0 and index(TempA1c, "e")=0 then BMC_lab_Las_Hem_A1c_Val = TempA1c;
+		else if index(TempA1c,"<")>0 then BMC_lab_Las_Hem_A1c_Val = 3.9;
+		else if index(TempA1c, "e")>0 then BMC_lab_Las_Hem_A1c_Val =.;
+		else if index(TempA1c, ">14")>0 then BMC_lab_Las_Hem_A1c_Val = 14.1;
+		else if index(TempA1c, ">15")>0 then BMC_lab_Las_Hem_A1c_Val = 15.1;
+		if Is_overdue_For_bre_can_scr = "Yes" or Is_overdue_For_cer_can_scr = "Yes" or Is_overdue_for_colonoscopy = "Yes" then Overdue_for_Screening = "Yes";
+run;
+
+proc sort data=&out; by mrn; run;
+
+%mend;
+%pcmh("G:\PCMH registry 2016\Registry Exports\2022-03-29_PCMH_Regsitry", out=PCMH);
+
+proc sql;
+create table HTI_Cohort1_Update as
+	select H.*, p.BMC_lab_Las_Hem_A1c_Val as Updated_A1c, p.Bmc_Lab_Las_Hem_A1c_Dat as Updated_A1c_date,
+		p.Bmc_Lab_Las_Hem_A1c_val - h.A1cHTI_Init as Updated_A1c_Change
+	from HTI_analysis as h left join PCMH as p
+	 on h.mrn_char = p.mrn;
+quit;
+
+proc import datafile="G:\MPaskewicz\Intervention Analysis\A1c\Working Datasets\HTI SoC_HTI Subsets" dbms=xlsx out=Control_plot replace;
+	getnames=yes;
+	sheet=controlplot;
+run;
+***Set Formats****;
+proc format;
+	value a1c_control
+		low - 8.99 = "Controlled"
+		9 - high = "Uncontrolled"
+		;
+run;
+
+proc format;
+	value a1c_improvement
+		low - -0.01 = "Lowered"
+		0 - high = "No Improvement or Increase"
+		;
+run;
+
+proc format;
+	value ApptCom 0 = "No Appts Completed"
+						1 - 5 = "Appt Completed"
+						;
+run;
+proc format;
+	value $NPCom "Completed" = "Appt Completed"
+						other = " No Appt Completed"
+						;
+run;
+Proc format;
+	value days
+	0-14 = "w/in 2wk"
+	15-21 = "w/in 3 wk"
+	22-high = "Over 3wk"
+	;
+run;
+proc freq data=HTI_Cohort1_update;
+	format updated_a1c a1c_control.;
+	where updated_a1c ne .;
+	table updated_a1c / nocum;
+run;
+
+proc freq data=HTI_Cohort1_update;
+	format updated_a1c_change a1c_improvement.;
+	where updated_a1c ne .;
+	table updated_a1c_change / nocum;
+run;
+
+
+proc means data=HTI_Cohort1_update mean std maxdec=2;
+	format updated_a1c a1c_control.;
+	class updated_a1c;
+	var A1cHTI_Init bmi show_rate_pct;
+run;
+proc means data=HTI_Cohort1_update mean std maxdec=2;
+	format updated_a1c_change a1c_improvement.;
+	class updated_a1c_change;
+	var A1cHTI_Init bmi show_rate_pct;
+run;
+
+ods html style=journal;
+proc sgplot data=Control_plot pctlevel=group;
+	title bold "A1c Control by Clinical Pathway";
+	vbar INT / group=Controlled_final groupdisplay=cluster stat=percent;
+	keylegend / title="Control Status";
+	yaxis label="Percent";
+	xaxis label="Clinical Pathway";
+run;
+
+proc freq data=control_plot;
+	Title "Frequency of Controlled Pts by Clinical Pathway";
+	table INT*Controlled_Final / chisq relrisk plots=freqplot;
+run;
+
+proc npar1way data=HTI_Cohort1_update wilcoxon;
+	format updated_a1c a1c_control.;
+	class updated_a1c;
+	var A1cHTI_Init bmi;
+run;
+
+proc npar1way data=HTI_Cohort1_update wilcoxon;
+	format updated_a1c_change a1c_improvement.;
+	class updated_a1c_change;
+	var A1cHTI_Init bmi;
+run;
+
+proc ttest data=hti_cohort1_update;
+	format updated_a1c a1c_control.;
+	class updated_a1c;
+	var avgtimebtwpharmdsched;
+run;
+
+
+
+proc freq data=hti_cohort1_update;
+	format updated_a1c a1c_control. avgtimebtwpharmdsched days.;
+	table updated_a1c*avgtimebtwpharmdsched / fisher;
+run;
+
+
+
+proc freq data=hti_cohort1_update;
+	format updated_a1c a1c_control. PharmD_Visits_Completed PharmDApptCom.;
+	table updated_a1c*PharmD_Visits_Completed/ fisher;
+run;
+
+proc freq data=hti_cohort1_update;
+	format updated_a1c a1c_control. PharmD_Visits_Completed PharmDApptCom.;
+	table updated_a1c*PharmD_Visits_Completed/ fisher;
+run;
+
+proc freq data=hti_cohort1_update;
+	format updated_a1c_change a1c_improvement. PharmD_Visits_Completed PharmDApptCom.;
+	table updated_a1c_change*PharmD_Visits_Completed/ fisher;
+run;
+
+
+
+proc freq data=hti_cohort1_update;
+	format updated_a1c a1c_control. RN_Visits_Completed ApptCom.;
+	table updated_a1c*RN_Visits_Completed/ fisher;
+run;
+
+proc freq data=hti_cohort1_update;
+	format updated_a1c a1c_control. NP_Visit_ck $NPCom.;
+	table updated_a1c*NP_Visit_ck/ fisher;
+run;
+
+proc freq data=hti_cohort1_update;
+	format updated_a1c_change a1c_improvement. RN_Visits_Completed ApptCom.;
+	table updated_a1c_change*RN_Visits_Completed/ fisher;
+run;
+
+proc freq data=hti_cohort1_update;
+	format updated_a1c_change a1c_improvement. NP_Visit_ck $NPCom.;
+	table updated_a1c_change*NP_Visit_ck/ fisher;
+run;
+
+options validvarname=v7;
+proc import datafile="G:\MPaskewicz\Intervention Analysis\A1c\Write Up\HTI SoC_HTI Subsets.xlsx" dbms=xlsx out=AccessData replace;
+	getnames=yes;
+	range= "Access$A1:H15";
+run;
+
+Proc format;
+	value monthNum_Nm
+		6 = "Jun"
+		7 = "Jul"
+		8 = "Aug"
+		9 = "Sep"
+		10 = "Oct"
+		11 = "Nov"
+		12 = "Dec"
+		;
+run;
+ods html style=Journal2;
+
+Proc SGplot data=accessdata;
+	title bold "Maximum Days to 3rd Next Available Appointment for Any Appointment Type";
+	format month monthnum_nm.;
+	series x=month y=Max_3rd_next / group=program lineattrs=(Color=Black);
+	xaxis label="Month";
+	yaxis label= "Days" max=39;
+	refline 14 30 / axis=y label=("Goal" "Threshold for Schedule Adjustment");
+run;
+title;
+
+proc npar1way data=hti_cohort1_update wilcoxon;
+	format updated_a1c a1c_control.;
+	class updated_a1c;
+	var show_rate_pct;
+run;
+
+proc npar1way data=hti_cohort1_update wilcoxon;
+	format updated_a1c_change a1c_improvement.;
+	class updated_a1c_change;
+	var show_rate_pct;
+run;
+
+proc ttest data=hti_cohort1_update;
+	format updated_a1c a1c_control.;
+	class updated_a1c;
+	var show_rate_pct;
+run;
+
+proc ttest data=hti_cohort1_update;
+	format updated_a1c_change a1c_improvement.;
+	class updated_a1c_change;
+	var show_rate_pct;
+run;
